@@ -7,7 +7,7 @@ import random
 
 
 def sigmoid(x):
-    -1 / math.expm1(-x)
+    return -1 / math.expm1(-x)
 
 
 class Node(object):
@@ -29,9 +29,14 @@ class Node(object):
         self.upstream.append(conn)
 
     def calc_output(self):
+        print('layer index:%d,node index:%d, %s' %
+              (self.layer_index, self.node_index,
+               '\n'.join(str(conn) for conn in self.upstream)))
+        print('\n'.join(str(conn.upstream_node) for conn in self.upstream))
         output = reduce(
             lambda ret, conn: ret + conn.upstream_node.output * conn.weight,
             self.upstream, 0)
+        print(output)
         self.output = sigmoid(output)
 
     def calc_hidden_layer_delta(self):
@@ -54,12 +59,19 @@ class Node(object):
         return node_str + '\n\tdownstream:' + downstream_str + '\n\t' + upstream_str
 
 
-class ConstNode(object):
+class ConstNode(Node):
     def __init__(self, layer_index, node_index):
-        self.layer_index = layer_index
-        self.node_index = node_index
-        self.downstream = []
+        super(ConstNode, self).__init__(layer_index, node_index)
         self.output = 1
+
+    def append_upstream_connection(self, conn):
+        pass
+
+    def calc_output_layer_delta(self, label):
+        pass
+
+    def calc_output(self):
+        pass
 
     def append_downsteram_connection(self, conn):
         self.downstream.append(conn)
@@ -77,7 +89,7 @@ class ConstNode(object):
         return node_str + '\n\tdownstream:' + downstream_str
 
 
-def Layer(object):
+class Layer(object):
     def __init__(self, layer_index, node_count):
         self.layer_index = layer_index
         self.nodes = [Node(layer_index, i) for i in range(node_count)]
@@ -119,3 +131,114 @@ class Connection(object):
                                             self.downstream_node.layer_index,
                                             self.downstream_node.node_index,
                                             self.weight)
+
+
+class Connections(object):
+    def __init__(self):
+        self.connections = []
+
+    def add_connection(self, connection):
+        self.connections.append(connection)
+
+    def dump(self):
+        for conn in self.connections:
+            print(conn)
+
+
+class Network(object):
+    def __init__(self, layers):
+        self.layers = [Layer(i, c) for i, c in enumerate(layers)]
+        self.connections = Connections()
+
+        for l, nl in zip(self.layers[:-1], self.layers[1:]):
+            conns = [Connection(u, d) for u in l.nodes for d in nl.nodes[:-1]]
+            for conn in conns:
+                self.connections.add_connection(conn)
+                conn.downstream_node.append_upstream_connection(conn)
+                conn.upstream_node.append_downsteram_connection(conn)
+
+    def update_weight(self, rate):
+        for layer in self.layers[:-1]:
+            for n in layer.nodes:
+                for conn in n.downstream:
+                    conn.update_weight(rate)
+
+    def calc_gradient(self):
+        for layer in self.layers[:-1]:
+            for n in layer.nodes:
+                for conn in n.downstream:
+                    conn.calc_gradient()
+
+    def calc_delta(self, labels):
+        for n, l in zip(self.layers[-1].nodes, labels):
+            n.calc_output_layer_delta(l)
+
+        for layer in self.layers[-2::-1]:
+            for n in layer.nodes:
+                n.calc_hidden_layer_delta()
+
+    def predict(self, sample):
+        self.layers[0].set_output(sample)
+        for layer in self.layers[1:]:
+            layer.calc_output()
+
+        return map(lambda n: n.output, self.layers[-1].nodes[:-1])
+
+    def get_gradient(self, labels, sample):
+        self.predict(sample)
+        self.calc_delta(labels)
+        self.calc_gradient()
+
+    def train(self, labels, samples, rate, iteration):
+        for _ in range(iteration):
+            for label, sample in zip(labels, samples):
+                self.train_one_sample(label, sample, rate)
+
+    def train_one_sample(self, labels, sample, rate):
+        self.predict(sample)
+        self.calc_delta(labels)
+        self.dump()
+        self.update_weight(rate)
+        self.dump()
+
+    def dump(self):
+        print('---------------------------------dump network')
+        for layer in self.layers:
+            layer.dump()
+        print('+++++++++++++++++++++++++++++++++dump network')
+
+
+def gradient_check(network, sample_feature, sample_label):
+    network_error = lambda vec1, vec2: \
+        .5 * sum(map(lambda v: (v[0] - v[1]) * (v[0] - v[1]), zip(vec1, vec2)))
+
+    network.get_gradient(sample_feature, sample_label)
+
+    for conn in network.connections.connections:
+        epsilon = 0.0001
+        conn.weight += epsilon
+        error1 = network_error(network.predict(sample_feature), sample_label)
+
+        conn.weight -= 2 * epsilon
+        error2 = network_error(network.predict(sample_feature), sample_label)
+
+        expected_gradient = (error2 - error1) / (2 * epsilon)
+
+        print 'expected gradient:\t%f\nactual gradient: \t%f' % (
+            expected_gradient, conn.get_gradient())
+
+
+def test():
+    input_vecs = [[10], [20], [31], [44], [49]]
+    labels = [[1000], [2000], [3600], [5000], [5000]]
+    network = Network([1, 1, 1])
+    network.train(labels, input_vecs, 0.3, 1)
+    network.dump()
+    '''
+    for f, l in zip(input_vecs, labels):
+        gradient_check(network, f, l)
+        '''
+
+
+if __name__ == '__main__':
+    test()
