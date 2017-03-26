@@ -7,7 +7,13 @@ import random
 
 
 def sigmoid(x):
-    return -1 / math.expm1(-x)
+    try:
+        ret = 1 / (math.expm1(-x) + 2)
+        #print('sigmod:%f,ret:%f', x, ret)
+        return ret
+    except OverflowError:
+        print(x)
+        return 0 if x < 0 else 1
 
 
 class Node(object):
@@ -29,14 +35,16 @@ class Node(object):
         self.upstream.append(conn)
 
     def calc_output(self):
+        '''
         print('layer index:%d,node index:%d, %s' %
               (self.layer_index, self.node_index,
                '\n'.join(str(conn) for conn in self.upstream)))
         print('\n'.join(str(conn.upstream_node) for conn in self.upstream))
+        '''
         output = reduce(
             lambda ret, conn: ret + conn.upstream_node.output * conn.weight,
             self.upstream, 0)
-        print(output)
+        #print(output)
         self.output = sigmoid(output)
 
     def calc_hidden_layer_delta(self):
@@ -56,7 +64,7 @@ class Node(object):
                                 self.downstream, '')
         upstream_str = reduce(lambda ret, conn: ret + '\n\t' + str(conn),
                               self.upstream, '')
-        return node_str + '\n\tdownstream:' + downstream_str + '\n\t' + upstream_str
+        return node_str + '\n\tdownstream:' + downstream_str + '\n\tupstream:' + upstream_str
 
 
 class ConstNode(Node):
@@ -182,6 +190,11 @@ class Network(object):
         for layer in self.layers[1:]:
             layer.calc_output()
 
+        '''
+        for l in self.layers:
+            l.dump()
+        '''
+
         return map(lambda n: n.output, self.layers[-1].nodes[:-1])
 
     def get_gradient(self, labels, sample):
@@ -197,9 +210,9 @@ class Network(object):
     def train_one_sample(self, labels, sample, rate):
         self.predict(sample)
         self.calc_delta(labels)
-        self.dump()
+        #self.dump()
         self.update_weight(rate)
-        self.dump()
+        #self.dump()
 
     def dump(self):
         print('---------------------------------dump network')
@@ -230,14 +243,16 @@ def gradient_check(network, sample_feature, sample_label):
 
 def test():
     input_vecs = [[10], [20], [31], [44], [49]]
-    labels = [[1000], [2000], [3600], [5000], [5000]]
+    labels = [[1000], [2000], [3600], [4000], [5000]]
+    #input_vecs = [[10], [20]]
+    #labels = [[1000], [2000]]
     network = Network([1, 1, 1])
-    network.train(labels, input_vecs, 0.3, 1)
-    network.dump()
-    '''
+    network.train(labels, input_vecs, 0.3, 100)
     for f, l in zip(input_vecs, labels):
         gradient_check(network, f, l)
-        '''
+
+    print(network.predict([90]))
+    print(network.predict([10]))
 
 
 if __name__ == '__main__':
