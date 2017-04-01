@@ -11,8 +11,8 @@ def element_wise_op(array, op):
 
 
 def get_patch(input_array, i, j, kernel_width, kernel_height, stride):
-    return input_array[[i * stride, i * stride + kernel_width - 1],
-                       [j * stride, j * stride + kernel_height - 1]]
+    return input_array[i * stride:i * stride + kernel_width, j * stride:
+                       j * stride + kernel_height]
 
 
 def conv(input_array, kernel_array, output_array, stride, bias):
@@ -98,6 +98,41 @@ class ConvLayer(object):
 
         return expand_array
 
+    def bp_sensitivity_map(self, sensitivity_array, activator):
+        expanded_array = self.expand_sensitivity_map(sensitivity_array)
+        expanded_width = expanded_array.shape[2]
+        zp = (self.input_width + self.filter_width - 1 - expanded_width) / 2
+        padded_array = padding(expanded_array, zp)
+        self.delta_array = self.create_delta_array()
+        for f in range(self.filter_number):
+            filter = self.filters[f]
+            filpped_weights = np.array(
+                map(lambda i: np.rot90(i, 2), filter.get_weights()))
+            delta_array = self.create_delta_array()
+            for d in range(delta_array.shape[0]):
+                conv(padded_array[f], filpped_weights[d], delta_array[d], 1, 0)
+            self.delta_array += delta_array
+
+        derivative_array = np.array(self.input_array)
+        element_wise_op(derivative_array, activator.backward)
+        self.delta_array *= derivative_array
+
+    def create_delta_array(self):
+        return np.zeros(self.channel_number, self.input_height,
+                        self.input_width)
+
+    def bp_gradient(self, sensitivity_array):
+        expanded_array = self.expand_sensitivity_map(sensitivity_array)
+        for f in range(self.filter_number):
+            filter = self.filter[f]
+            for d in range(filter.weights.shape[0]):
+                conv(self.padded_input_array[d], expanded_array[f],
+                     filter.weights_grad[d], 1, 0)
+        filter.bias_grad = expanded_array[f].sum()
+
+    def update(self):
+        for filter in self.filters:
+            filter.update(self.learning_rate)
 
 class Filter(object):
     def __init__(self, width, height, depth):
@@ -127,3 +162,64 @@ class ReluActivator(object):
 
     def backward(self, output):
         return 1 if output > 0 else 0
+
+
+class IdentityActivator(object):
+    def forward(self, weighted_input):
+        return weighted_input
+
+    def backward(self, output):
+        return 1
+
+
+def init_test():
+    a = np.array(
+        [[[0, 1, 1, 0, 2], [2, 2, 2, 2, 1], [1, 0, 0, 2, 0], [0, 1, 1, 0, 0],
+          [1, 2, 0, 0, 2]], [[1, 0, 2, 2, 0], [0, 0, 0, 2, 0], [1, 2, 1, 2, 1],
+                             [1, 0, 0, 0, 0], [1, 2, 1, 1, 1]],
+         [[2, 1, 2, 0, 0], [1, 0, 0, 1, 0], [0, 2, 1, 0, 1], [0, 1, 2, 2, 2],
+          [2, 1, 0, 0, 1]]])
+
+    b = np.array([[[0, 1, 1], [2, 2, 2], [1, 0, 0]], [[1, 0, 2], [0, 0, 0],
+                                                      [1, 2, 1]]])
+    c1 = ConvLayer(5, 5, 3, 3, 3, 2, 1, 2, IdentityActivator(), 0.001)
+    c1.filters[0].weights = np.array(
+        [[[-1, 1, 0], [0, 1, 1], [0, 1, 1]],
+         [[-1, -1, 0], [0, 0, 0], [0, -1, 0]], [[0, 0, -1], [0, 1, 0],
+                                                [1, -1, -1]]],
+        dtype=np.float64)
+    c1.filters[0].bias = 1
+    c1.filters[1].weights = np.array(
+        [[[1, 1, -1], [-1, -1, 1], [0, -1, 1]],
+         [[0, 1, 0], [-1, 0, -1], [0, -1, 1]], [[-1, 0, 0], [-1, 0, 1],
+                                                [-1, 0, 0]]],
+        dtype=np.float64)
+
+    return a, b, c1
+
+
+def gradient_check():
+    error_function = lambda o: o.sum()
+
+    a, b, c1 = init_test()
+    sensitivity_array = np.ones(c1.output_array.shape, dtype=np.float64)
+
+    c1.backward(a, sensitivity_array, IdentityActivator())
+    epsilion = 10e-4
+    for d in range(c1.filters[0].weights_grad.shape[2]):
+        for i in range(c1.filters[0].weights_grad.shape[1]):
+            for j in range(c1.filters[0].weights_grad.shape[0]):
+                c1.filters[0].weights[d, i, j] += epsilion
+                c1.forward(a)
+                err1 = error_function(c1.output_array)
+                c1.filters[0].weights[d, i, j] -= 2 * epsilion
+                c1.forward(a)
+                err2 = error_function(c1.output_array)
+                expect_grad = (err1 - err2) / (2 * epsilion)
+                c1.filters[0].weights[d, i, j] += epsilion
+                print('weights(%d,%d,%d): expected - actual %f - %f' %
+                    (d, i, j, expect_grad, c1.filters[0].weights_grad[d, i, j]))
+
+
+if __name__ == '__main__':
+    gradient_check()
